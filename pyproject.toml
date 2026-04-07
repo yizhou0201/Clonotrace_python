@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clonotrace"
+version = "1.1.0"
+description = "Deciphering T Cell Fate and Clonal Dynamics via Integrative Single-Cell Lineage Modeling"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Yuntian Fu"}
+]
+
+dependencies = [
+    "numpy>=1.20",
+    "scipy>=1.7",
+    "pandas>=1.3",
+    "scikit-learn>=0.24",
+    "igraph>=0.10",
+    "umap-learn>=0.5",
+    "POT>=0.9",
+    "h5py>=3.0",
+    "joblib>=1.0",
+    "matplotlib>=3.4",
+    "adjustText>=0.7",
+    "statsmodels>=0.13",
+    "patsy>=0.5",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["clonotrace*"]
