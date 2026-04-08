@@ -160,7 +160,7 @@ def leiden_embedding(data, k=30, prune_snn=0, weight="jaccard", resolution=1,
             beta=0.01,
         )
     else:
-        partition = G.community_multilevel(weights="weight")
+        partition = G.community_multilevel(weights="weight", resolution=resolution)
 
     return np.array(partition.membership)
 
@@ -201,7 +201,7 @@ def leiden_embedding_fast(data, k=30, prune_snn=0, weight="jaccard", resolution=
 
 
 def leiden_dis(dismat, k=10, prune_snn=0, weight="jaccard", resolution=1,
-               if_umap=True, method="leiden"):
+               if_umap=True, method="leiden", umap_n_epochs=200):
     """Community detection from precomputed distance matrix.
 
     Parameters
@@ -212,6 +212,7 @@ def leiden_dis(dismat, k=10, prune_snn=0, weight="jaccard", resolution=1,
     resolution : float
     if_umap : bool  if True, also return UMAP coordinates
     method : str  'leiden' (default) or 'louvain'
+    umap_n_epochs : int  UMAP optimization epochs (default 200, matching R)
 
     Returns
     -------
@@ -229,14 +230,14 @@ def leiden_dis(dismat, k=10, prune_snn=0, weight="jaccard", resolution=1,
     if if_umap:
         if umap is None:
             raise ImportError("umap-learn required: pip install umap-learn")
-        reducer = umap.UMAP(metric="precomputed")
+        reducer = umap.UMAP(metric="precomputed", n_epochs=umap_n_epochs)
         umap_coords = reducer.fit_transform(dismat)
 
     starts, ends, weights, nn = _snn_from_dist(dismat, k, prune_snn)
     G = _igraph_from_edgelist(starts, ends, weights, nn)
 
     if method == "louvain":
-        partition = G.community_multilevel(weights="weight")
+        partition = G.community_multilevel(weights="weight", resolution=resolution)
     else:
         partition = G.community_leiden(
             weights="weight",

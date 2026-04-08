@@ -208,6 +208,10 @@ def cluster_profile_mass(cell_profile_prob, cluster_label):
 def cluster_profile_enrich(cell_profile_prob, cluster_label, permute_n=300):
     """Permutation-based enrichment test of profiles within clusters.
 
+    Uses running accumulation instead of stacking all permutations,
+    reducing memory from O(clusters * profiles * permute_n) to
+    O(clusters * profiles).
+
     Returns
     -------
     dict with keys 'prob' and 'pval' (both np.ndarray)
@@ -218,15 +222,16 @@ def cluster_profile_enrich(cell_profile_prob, cluster_label, permute_n=300):
     cluster_label = np.asarray(cluster_label)
     truth = cluster_profile_mass(cell_profile_prob, cluster_label)
 
-    permute_stack = np.stack([
-        cluster_profile_mass(
+    # Running count: how many permutations does truth exceed?
+    count_greater = np.zeros_like(truth)
+    for _ in range(permute_n):
+        perm = cluster_profile_mass(
             cell_profile_prob,
             np.random.permutation(cluster_label)
         )
-        for _ in range(permute_n)
-    ], axis=2)
+        count_greater += (truth > perm).astype(float)
 
-    pval = 1 - np.mean(truth[:, :, np.newaxis] > permute_stack, axis=2)
+    pval = 1.0 - count_greater / permute_n
 
     return {"prob": truth, "pval": pval}
 

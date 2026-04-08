@@ -84,8 +84,8 @@
   },
   "optimized": {
     "dis_points_to_edges": {
-      "time": 0.010823874999914551,
-      "memory_bytes": 28007210,
+      "time": 0.01074895899364492,
+      "memory_bytes": 28007282,
       "output_shape": [
         5000,
         50
@@ -93,60 +93,60 @@
       "output_checksum": 411478.25395756774
     },
     "mat_sparsify": {
-      "time": 0.008846832999552134,
-      "memory_bytes": 4426635,
+      "time": 0.008732999995118007,
+      "memory_bytes": 4426747,
       "nonzero_frac": 0.5672111111111111,
       "output_checksum": 36535.537312900415
     },
     "embedding2knn": {
-      "time": 0.04662414599988551,
-      "memory_bytes": 3907104,
+      "time": 0.04789908349994221,
+      "memory_bytes": 3912546,
       "nnz": 70546,
       "output_checksum": 21318.087954557348
     },
     "snn_from_dist": {
-      "time": 0.005739084001106676,
-      "memory_bytes": 2195160,
+      "time": 0.005871540997759439,
+      "memory_bytes": 2195456,
       "n_edges": 7500,
       "output_checksum": 1953.0899572858884
     },
     "link2cluster": {
-      "time": 0.009129041001870064,
+      "time": 0.009302667000156362,
       "memory_bytes": 112616,
       "n_clusters": 150,
       "output_checksum": 19175.0
     },
     "nearest_knn": {
-      "time": 0.00323295799898915,
+      "time": 0.0029777089948765934,
       "memory_bytes": 800880,
       "n_rows": 20
     },
     "sync_sparse_rows": {
-      "time": 0.043345082998712314,
+      "time": 0.04308212499745423,
       "memory_bytes": 814168,
       "is_sparse": true,
       "nnz": 75
     },
     "DPT_T": {
-      "time": 0.01066187500327942,
-      "memory_bytes": 1613595,
+      "time": 0.010965417000988964,
+      "memory_bytes": 1616542,
       "output_shape": [
         200
       ],
-      "output_checksum": 650.5235736446857
+      "output_checksum": 650.5209054739604
     },
     "acct": {
-      "time": 0.17450112500227988,
-      "memory_bytes": 1612958,
+      "time": 0.004113666997000109,
+      "memory_bytes": 1614903,
       "output_shape": [
         200,
         200
       ],
-      "output_checksum": 5.829793751942089
+      "output_checksum": 6.666889262874065e-14
     },
     "label_spreading": {
-      "time": 0.0009836250028456561,
-      "memory_bytes": 212164,
+      "time": 0.001058292000379879,
+      "memory_bytes": 212086,
       "output_shape": [
         500,
         5
@@ -154,14 +154,14 @@
       "output_checksum": 25.276865351280957
     },
     "clone_partition": {
-      "time": 0.0018472090014256537,
+      "time": 0.0018547080035205,
       "memory_bytes": 226856,
       "n_groups": 5,
       "total_clones": 50
     },
     "cluster_profile_enrich": {
-      "time": 0.06078962500032503,
-      "memory_bytes": 124487,
+      "time": 0.06214766699849861,
+      "memory_bytes": 82259,
       "pval_shape": [
         4,
         4
