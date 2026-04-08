@@ -85,10 +85,9 @@ def _snn_from_dist(dismat, k, prune_snn=0):
     # Compute shared neighbour counts only for kNN edges
     # shared_full[i,j] = |kNN(i) ∩ kNN(j)| for all pairs; extract kNN entries
     shared_full = adj.dot(adj.T).tocsr()
-    shared_counts = np.array(
-        [shared_full[i, indices[i, m]] for i in range(n) for m in range(k)],
-        dtype=float,
-    )
+    row_idx = np.repeat(np.arange(n), k)
+    col_idx = indices.ravel()
+    shared_counts = np.asarray(shared_full[row_idx, col_idx], dtype=float).ravel()
 
     jaccard = shared_counts / (2 * k - shared_counts)
 

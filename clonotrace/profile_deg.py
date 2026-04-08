@@ -226,27 +226,25 @@ def cluster_profile_enrich(cell_profile_prob, cluster_label, permute_n=300):
         for _ in range(permute_n)
     ], axis=2)
 
-    pval = np.zeros_like(truth)
-    for i in range(truth.shape[0]):
-        for j in range(truth.shape[1]):
-            pval[i, j] = 1 - np.sum(truth[i, j] > permute_stack[i, j, :]) / permute_n
+    pval = 1 - np.mean(truth[:, :, np.newaxis] > permute_stack, axis=2)
 
     return {"prob": truth, "pval": pval}
 
 
-def profile_cluster_DEG_permute(P, G, dpt, n=50):
+def profile_cluster_DEG_permute(P, G, dpt, n=50, n_jobs=-1):
     """Permutation null distribution for profile-based DE.
 
     Returns
     -------
     list of np.ndarray  p-values for each permutation
     """
-    null_p = []
-    for _ in range(n):
+    def _single_permute(_):
         P_perm = P[np.random.permutation(len(P))]
         P_perm = np.apply_along_axis(np.random.permutation, 1, P_perm)
         result = soft_cluster_gam_fit(G, dpt, P_perm, df=1, lam=1e-4)
-        null_p.append(result["stat"]["pval"].values)
+        return result["stat"]["pval"].values
+
+    null_p = Parallel(n_jobs=n_jobs)(delayed(_single_permute)(i) for i in range(n))
     return null_p
 
 
@@ -331,7 +329,8 @@ def profile_cluster_DEG(profile, cluster, exprs, cell_meta, cell_profile_prob,
 
 def profile_multiclusters_DEG(profile, exprs, cell_meta, cell_profile_prob,
                                 clusters=None, cluster_col="cluster",
-                                pseudotime_col="cell_t", mass_thresh=100):
+                                pseudotime_col="cell_t", mass_thresh=100,
+                                n_jobs=-1):
     """Profile-specific DE across multiple clusters.
 
     Returns
@@ -372,5 +371,5 @@ def profile_multiclusters_DEG(profile, exprs, cell_meta, cell_profile_prob,
             result = None
         return cl, result
 
-    results = Parallel(n_jobs=1)(delayed(_run)(cl) for cl in clusters)
+    results = Parallel(n_jobs=n_jobs)(delayed(_run)(cl) for cl in clusters)
     return {cl: r for cl, r in results if r is not None}

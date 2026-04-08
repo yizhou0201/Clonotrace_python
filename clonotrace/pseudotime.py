@@ -11,6 +11,30 @@ from scipy.sparse.linalg import eigsh, spsolve
 from .auxiliary import embedding2knn
 
 
+def _build_acct_operator(T_mat):
+    """Build the ACT linear operator A = I + phi0*phi0^T - T from transition matrix.
+
+    Parameters
+    ----------
+    T_mat : sp.spmatrix or np.ndarray  (N, N) transition matrix
+
+    Returns
+    -------
+    A : sp.spmatrix  the linear operator
+    phi0 : np.ndarray  dominant eigenvector
+    """
+    T_mat = sp.csr_matrix(T_mat, dtype=float)
+    N = T_mat.shape[0]
+
+    vals, vecs = eigsh(T_mat, k=1, which="LM")
+    phi0 = np.array(vecs[:, 0], dtype=float).ravel()
+
+    I = sp.eye(N, format="csr", dtype=float)
+    outer = sp.csr_matrix(np.outer(phi0, phi0))
+    A = I + outer - T_mat
+    return A, phi0
+
+
 def acct(T_mat):
     """Compute accumulated commute time (ACT) matrix from transition matrix.
 
@@ -22,17 +46,8 @@ def acct(T_mat):
     -------
     np.ndarray  (N, N) ACT matrix
     """
-    T_mat = sp.csr_matrix(T_mat, dtype=float)
-    N = T_mat.shape[0]
-
-    # Dominant eigenvector
-    vals, vecs = eigsh(T_mat, k=1, which="LM")
-    phi0 = np.array(vecs[:, 0], dtype=float).ravel()
-
-    # A = I + phi0 * phi0^T - T_mat
-    I = sp.eye(N, format="csr", dtype=float)
-    outer = sp.csr_matrix(np.outer(phi0, phi0))
-    A = I + outer - T_mat
+    A, phi0 = _build_acct_operator(T_mat)
+    N = A.shape[0]
 
     # Solve A @ M = I  => M = A^{-1} - I
     M = np.zeros((N, N))
@@ -49,6 +64,9 @@ def acct(T_mat):
 def DPT_T(T_mat, start):
     """Diffusion pseudotime from ACT matrix.
 
+    Uses sparse LU factorization for faster solving compared to
+    N separate conjugate gradient iterations.
+
     Parameters
     ----------
     T_mat : sp.spmatrix or np.ndarray
@@ -58,7 +76,26 @@ def DPT_T(T_mat, start):
     -------
     np.ndarray  (N,) pseudotime values
     """
-    M = acct(T_mat)
+    A, phi0 = _build_acct_operator(T_mat)
+    N = A.shape[0]
+
+    try:
+        from scipy.sparse.linalg import splu
+        lu = splu(sp.csc_matrix(A))
+        # Solve all columns via pre-computed LU factorization
+        M = lu.solve(np.eye(N))
+        M = M - np.eye(N)
+    except Exception:
+        # Fallback to iterative CG
+        M = np.zeros((N, N))
+        e_i = np.zeros(N)
+        for i in range(N):
+            e_i[:] = 0.0
+            e_i[i] = 1.0
+            col, _ = sp.linalg.cg(A, e_i, maxiter=500)
+            M[:, i] = col
+        M = M - np.eye(N)
+
     diff = M - M[start]
     return np.sqrt(np.sum(diff ** 2, axis=1))
 

@@ -137,10 +137,12 @@ def dimplot(embedding, annot, color_by, alpha_by=None, connectivity=None,
         if connectivity is not None:
             edge_df = connectivity_coord(centers[["x", "y"]].values, connectivity)
             edge_df = edge_df[edge_df["x"] >= connectivity_thresh]
-            for _, row in edge_df.iterrows():
-                ax.plot([row["i_x"], row["j_x"]], [row["i_y"], row["j_y"]],
-                        color="honeydew", alpha=0.75,
-                        linewidth=float(row["x"]) * 2)
+            if len(edge_df) > 0:
+                segments = [[(r["i_x"], r["i_y"]), (r["j_x"], r["j_y"])]
+                            for _, r in edge_df.iterrows()]
+                lc = LineCollection(segments, colors="honeydew", alpha=0.75,
+                                    linewidths=edge_df["x"].values * 2)
+                ax.add_collection(lc)
             ax.scatter(centers["x"], centers["y"],
                        s=np.log(centers["count"]) * 10, c="black", zorder=5)
 
@@ -200,10 +202,12 @@ def scatterpie(scatter_coord, composition, connectivity=None,
         coord_arr = scatter_coord[[x_col, y_col]].values
         edge_df = connectivity_coord(coord_arr, connectivity)
         edge_df = edge_df[edge_df["x"] >= connectivity_thresh]
-        for _, row in edge_df.iterrows():
-            ax.plot([row["i_x"], row["j_x"]], [row["i_y"], row["j_y"]],
-                    color=edge_color, alpha=edge_alpha,
-                    linewidth=float(row["x"]) * 2)
+        if len(edge_df) > 0:
+            segments = [[(r["i_x"], r["i_y"]), (r["j_x"], r["j_y"])]
+                        for _, r in edge_df.iterrows()]
+            lc = LineCollection(segments, colors=edge_color, alpha=edge_alpha,
+                                linewidths=edge_df["x"].values * 2)
+            ax.add_collection(lc)
 
     # Draw pies
     cmap = plt.get_cmap("tab20")

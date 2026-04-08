@@ -172,20 +172,25 @@ def clone_partition(clone_matrix, k=10, similarity_threshold=0):
     sizes = np.array(bin_mat.sum(axis=0)).ravel()
 
     if sp.issparse(bin_mat):
-        intersection = (bin_mat.T.dot(bin_mat)).toarray()
+        intersection = bin_mat.T.dot(bin_mat)
     else:
-        intersection = bin_mat.T @ bin_mat
+        intersection = sp.csr_matrix(bin_mat.T @ bin_mat)
 
-    denom = np.tile(sizes, (n_clones, 1))
-    denom = np.maximum(denom, 1e-12)
-    sim = intersection / denom
-    np.fill_diagonal(sim, 1.0)
+    # Keep intersection sparse; compute similarity rows on demand
+    denom_vec = np.maximum(sizes, 1e-12)
+
+    def _get_sim_rows(row_indices, col_indices=None):
+        """Extract similarity submatrix, densifying only the needed rows/cols."""
+        sub = intersection[row_indices, :] if col_indices is None else intersection[np.ix_(row_indices, col_indices)]
+        sub = np.asarray(sub.toarray() if sp.issparse(sub) else sub, dtype=float)
+        d = denom_vec[col_indices] if col_indices is not None else denom_vec
+        return sub / d[np.newaxis, :]
 
     # Step 1: Farthest Point Sampling
     seeds = [int(np.argmax(sizes))]
     while len(seeds) < k:
         remaining = [i for i in range(n_clones) if i not in seeds]
-        seed_sim = sim[np.ix_(remaining, seeds)]
+        seed_sim = _get_sim_rows(remaining, seeds)
         max_sim_to_seeds = seed_sim.max(axis=1)
         next_seed = remaining[int(np.argmin(max_sim_to_seeds))]
         seeds.append(next_seed)
@@ -195,7 +200,8 @@ def clone_partition(clone_matrix, k=10, similarity_threshold=0):
     group_sizes = np.zeros(k, dtype=int)
     target_size = int(np.ceil(n_clones / k))
 
-    clone_sim_to_seeds = sim[seeds, :]
+    # Only densify seeds x all_clones submatrix
+    clone_sim_to_seeds = _get_sim_rows(seeds)
     assign_order = np.argsort(-clone_sim_to_seeds.max(axis=0))
 
     for i in assign_order:
@@ -303,11 +309,14 @@ def graph_clone_ot_sub(graph, cell_clone_prob, target_clone=None, cache=5000, ve
     flag = np.zeros(len(target_clone), dtype=bool)
 
     pool = []
+    pool_set = set()
     cell_dis_cache = {}
     full_ot = []
 
     col_sums = target_clone_ident.sum(axis=0)
     target_id = int(np.argmax(col_sums))
+
+    n_total_cells = cell_clone_prob.shape[0]
 
     while flag.sum() < len(target_clone):
         flag[target_id] = True
@@ -330,7 +339,7 @@ def graph_clone_ot_sub(graph, cell_clone_prob, target_clone=None, cache=5000, ve
                 f"Clone {global_id} has {len(cell_id)} cells, exceeding cache={cache}"
             )
 
-        append_cells = [c for c in cell_id if c not in set(pool)]
+        append_cells = [c for c in cell_id if c not in pool_set]
         for c in append_cells:
             dists = graph.distances(source=c, weights="weight")[0]
             cell_dis_cache[c] = np.array(dists)
@@ -338,30 +347,32 @@ def graph_clone_ot_sub(graph, cell_clone_prob, target_clone=None, cache=5000, ve
         # Evict from pool if needed
         if len(append_cells) + len(pool) > cache:
             remove_n = len(append_cells) + len(pool) - cache
-            pool_not_in_clone = [p for p in pool if p not in set(cell_id)]
+            cell_id_set = set(cell_id)
+            pool_not_in_clone = [p for p in pool if p not in cell_id_set]
             unflag_idx = np.where(~flag)[0]
             if len(pool_not_in_clone) > 0 and len(unflag_idx) > 0:
                 freq = target_clone_ident[np.ix_(pool_not_in_clone, unflag_idx)].sum(axis=1)
                 evict_idx = np.argsort(freq)[:remove_n]
-                evict = [pool_not_in_clone[i] for i in evict_idx]
-                pool = [p for p in pool if p not in set(evict)]
+                evict = set(pool_not_in_clone[i] for i in evict_idx)
+                pool = [p for p in pool if p not in evict]
+                pool_set -= evict
                 for e in evict:
                     cell_dis_cache.pop(e, None)
 
         pool.extend(append_cells)
+        pool_set.update(append_cells)
 
         clone_mass = cell_clone_prob[cell_id, global_id]
-        row_id = [pool.index(c) for c in cell_id]
+
+        # Stack cached distances for clone1 cells into a 2D array for fast indexing
+        clone1_cache = np.stack([cell_dis_cache[c] for c in cell_id])  # (len(cell_id), n_total_cells)
 
         for i in range(global_id + 1, n_clones):
             clone2_cells = np.where(cell_clone_prob[:, i] > 0)[0]
             if len(clone2_cells) == 0:
                 continue
-            # Build sub-distance matrix
-            sub_dis = np.array([
-                [cell_dis_cache[pool[r]][c2] for c2 in clone2_cells]
-                for r in row_id
-            ])
+            # Fast numpy indexing instead of nested list comprehension
+            sub_dis = clone1_cache[:, clone2_cells]
             dist_val = clone_2_ot(
                 sub_dis, clone_mass, cell_clone_prob[clone2_cells, i]
             )
@@ -418,7 +429,7 @@ def graph_clone_ot(graph, cell_clone_prob, prob_thresh=0.05, cache=5000,
     return pd.DataFrame(combined, columns=["group1", "group2", "dis"])
 
 
-def graph_clone_nn(graph, cell_clone_prob, prob_thresh=0.1, k=2, verbose=False):
+def graph_clone_nn(graph, cell_clone_prob, prob_thresh=0.1, k=2, verbose=False, n_jobs=-1):
     """Clone-to-clone nearest-neighbor distances on a cell graph.
 
     Returns
@@ -461,7 +472,7 @@ def graph_clone_nn(graph, cell_clone_prob, prob_thresh=0.1, k=2, verbose=False):
             out.append([i, j, d])
         return out
 
-    results = Parallel(n_jobs=1)(
+    results = Parallel(n_jobs=n_jobs)(
         delayed(_process_clone)(i) for i in range(n_groups - 1)
     )
     rows = [r for sub in results for r in sub]

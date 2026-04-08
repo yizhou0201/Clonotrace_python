@@ -46,7 +46,7 @@ def cell_knn_matrix_mutiplication(knn, cell_feature_mat, feature_feature_mat):
 
 
 def cell_knn_matrix_multiplication_parallel(knn, cell_feature_mat, feature_feature_mat,
-                                             chunk_size=5000):
+                                             chunk_size=5000, n_jobs=-1):
     """Parallelized matrix multiplication for kNN edge weighting.
 
     Parameters
@@ -71,7 +71,7 @@ def cell_knn_matrix_multiplication_parallel(knn, cell_feature_mat, feature_featu
         sub_knn = knn.iloc[chunk_idx]
         return cell_knn_matrix_mutiplication(sub_knn, cell_feature_mat, feature_feature_mat)
 
-    results = Parallel(n_jobs=1)(delayed(_process_chunk)(c) for c in chunks)
+    results = Parallel(n_jobs=n_jobs)(delayed(_process_chunk)(c) for c in chunks)
     return np.concatenate(results)
 
 
@@ -112,8 +112,7 @@ def cell_clone_coembed(cell_embedding, clone_embedding, cell_clone_prob,
     weights = cell_knn_matrix_multiplication_parallel(
         cell_knn_flat, cell_clone_prob, clone_knn_bin, chunk_size=5000
     )
-    cell_knn_flat = cell_knn_flat.copy()
-    cell_knn_flat["weight"] = weights
+    cell_knn_flat = cell_knn_flat.assign(weight=weights)
 
     # Symmetrize
     cell_knn_mat = long_symmetry(cell_knn_flat, row_names_from="node1",

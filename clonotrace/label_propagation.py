@@ -98,7 +98,8 @@ def label_spreading(adj, labels, label_n=None, alpha=0.9, max_iter=100,
 
 
 def label_spreading_bootstrap(adj, labels, refer=None, alpha=0.8,
-                               sample_rate=0.8, sample_n=50, **kwargs):
+                               sample_rate=0.8, sample_n=50, n_jobs=-1,
+                               **kwargs):
     """Bootstrap stability estimation for label propagation.
 
     Parameters
@@ -160,7 +161,7 @@ def label_spreading_bootstrap(adj, labels, refer=None, alpha=0.8,
         L1 = np.sum(np.abs(prob_mat - refer_norm), axis=1)
         return L1, same_flag
 
-    results = Parallel(n_jobs=1)(delayed(_bootstrap)(i) for i in range(sample_n))
+    results = Parallel(n_jobs=n_jobs)(delayed(_bootstrap)(i) for i in range(sample_n))
 
     deviance_arr = np.column_stack([r[0] for r in results])
     flag_arr = np.column_stack([r[1] for r in results])
@@ -317,7 +318,7 @@ def label_spreading_bootstrap_blocked(adj, labels, alpha=0.8,
                                        block_size=128, tol=1e-3,
                                        max_iter=100, epsilon=0,
                                        refer_h5=None, tmpdir=None,
-                                       verbose=True):
+                                       verbose=True, n_jobs=-1):
     """Bootstrap label spreading with HDF5 reference and per-cell deviance.
 
     Returns
@@ -400,7 +401,7 @@ def label_spreading_bootstrap_blocked(adj, labels, alpha=0.8,
             pass
         return dev * same_flag, same_flag
 
-    results = Parallel(n_jobs=1)(delayed(worker)(i) for i in range(sample_n))
+    results = Parallel(n_jobs=n_jobs)(delayed(worker)(i) for i in range(sample_n))
 
     dev_sum = sum(r[0] for r in results)
     flag_sum = sum(r[1] for r in results)

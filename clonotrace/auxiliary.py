@@ -11,7 +11,6 @@ import pandas as pd
 import scipy.sparse as sp
 from scipy.sparse.csgraph import minimum_spanning_tree
 from sklearn.neighbors import NearestNeighbors
-from sklearn.cluster import DBSCAN
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +30,7 @@ def long2wide(long, row_names_from, col_names_from, values_from, symmetric=False
     -------
     pd.DataFrame  wide matrix with row/col names
     """
-    long = long[[row_names_from, col_names_from, values_from]].copy()
+    long = long[[row_names_from, col_names_from, values_from]]
     if symmetric:
         rlong = long[[col_names_from, row_names_from, values_from]].copy()
         rlong.columns = [row_names_from, col_names_from, values_from]
@@ -55,7 +54,6 @@ def long_symmetry(long, row_names_from, col_names_from):
 
     Returns a symmetric long DataFrame with reversed entries added.
     """
-    long = long.copy()
     side = [c for c in long.columns if c not in (row_names_from, col_names_from)]
     long = long[[row_names_from, col_names_from] + side]
 
@@ -81,7 +79,7 @@ def long2square(long, row_names_from, col_names_from, values_from,
     -------
     np.ndarray  square matrix, row/col order = sorted(nodes)
     """
-    long = long[[row_names_from, col_names_from, values_from]].copy()
+    long = long[[row_names_from, col_names_from, values_from]]
     if symmetric:
         long = long_symmetry(long, row_names_from, col_names_from)
 
@@ -117,7 +115,7 @@ def long2sparse(long, row_names_from, col_names_from, values_from,
     -------
     sp.csr_matrix with .rownames and .colnames attributes set
     """
-    long = long[[row_names_from, col_names_from, values_from]].copy()
+    long = long[[row_names_from, col_names_from, values_from]]
     if symmetric:
         long = long_symmetry(long, row_names_from, col_names_from)
 
@@ -161,7 +159,7 @@ def wide2long(mat):
 # ---------------------------------------------------------------------------
 
 def link2cluster(link, nodes):
-    """Cluster nodes based on link connectivity via matrix diffusion + DBSCAN.
+    """Cluster nodes based on link connectivity using connected components.
 
     Parameters
     ----------
@@ -172,6 +170,8 @@ def link2cluster(link, nodes):
     -------
     np.ndarray  cluster labels (1-indexed)
     """
+    from scipy.sparse.csgraph import connected_components
+
     nodes = list(nodes)
     n = len(nodes)
     node_idx = {v: i for i, v in enumerate(nodes)}
@@ -189,17 +189,9 @@ def link2cluster(link, nodes):
     vals = np.ones(len(rows))
     A = sp.csr_matrix((vals, (rows, cols)), shape=(n, n))
 
-    # Matrix power via repeated squaring
-    A_f = A.astype(float)
-    result = A_f.copy()
-    for _ in range(4):  # 2^4 = 16 ≈ 20 in R
-        result = result.dot(result)
-    result = result.toarray()
-    dist_mat = 1.0 - result
-
-    db = DBSCAN(eps=0, min_samples=1, metric="precomputed")
-    labels = db.fit_predict(dist_mat) + 1  # 1-indexed
-    return labels
+    # Use connected components directly instead of matrix power + DBSCAN
+    n_components, labels = connected_components(A, directed=False)
+    return labels + 1  # 1-indexed
 
 
 def mnn_dist(dis, k):
@@ -245,7 +237,9 @@ def nearest_knn(dis, k, top=3):
         "j": indices.ravel(),
         "dis": dists.ravel(),
     })
-    df["_key"] = df.apply(lambda r: tuple(sorted((r["i"], r["j"]))), axis=1)
+    i_vals = df["i"].values
+    j_vals = df["j"].values
+    df["_key"] = np.where(i_vals <= j_vals, i_vals * n + j_vals, j_vals * n + i_vals)
     df = df.drop_duplicates("_key").drop(columns="_key")
     df = df.sort_values("dis").reset_index(drop=True)
     return df.iloc[: min(top, len(df))]
@@ -337,19 +331,30 @@ def dis_points_to_edges(points, edges):
     -------
     dict with keys 'map' (N, E) and 'dis' (N, E)
     """
-    points = np.asarray(points)
+    points = np.asarray(points, dtype=float)
     n_pts = len(points)
-    results = []
-    for edge in edges:
-        edge = np.asarray(edge)
-        col = np.array([dis_point_to_edge(points[y], edge[0], edge[1])
-                        for y in range(n_pts)])
-        results.append(col)
-    results = np.concatenate(results, axis=1)  # (N, 2*E)
     n_edges = len(edges)
-    dis_map = results[:, np.arange(0, 2 * n_edges, 2)]   # distance values
-    t_map = results[:, np.arange(1, 2 * n_edges, 2)]      # t projections
-    return {"map": t_map, "dis": dis_map}
+
+    # Stack edge starts and ends: (E, D)
+    edge_starts = np.array([np.asarray(e)[0] for e in edges], dtype=float)
+    edge_ends = np.array([np.asarray(e)[1] for e in edges], dtype=float)
+
+    # AB = edge vectors (E, D), AP = point - start (N, E, D)
+    AB = edge_ends - edge_starts  # (E, D)
+    AP = points[:, np.newaxis, :] - edge_starts[np.newaxis, :, :]  # (N, E, D)
+
+    # Projection parameter t = dot(AP, AB) / dot(AB, AB), clamped to [0, 1]
+    AB_dot_AB = np.sum(AB * AB, axis=1)  # (E,)
+    AB_dot_AB = np.maximum(AB_dot_AB, 1e-12)
+    t = np.sum(AP * AB[np.newaxis, :, :], axis=2) / AB_dot_AB[np.newaxis, :]  # (N, E)
+    t = np.clip(t, 0, 1)
+
+    # Closest point on each edge: A + t * AB
+    closest = edge_starts[np.newaxis, :, :] + t[:, :, np.newaxis] * AB[np.newaxis, :, :]  # (N, E, D)
+    diff = points[:, np.newaxis, :] - closest  # (N, E, D)
+    dis_map = np.sqrt(np.sum(diff ** 2, axis=2))  # (N, E)
+
+    return {"map": t, "dis": dis_map}
 
 
 # ---------------------------------------------------------------------------
@@ -459,30 +464,29 @@ def embedding2knn(embedding, k, mode="connectivity", **kwargs):
     """
     embedding = np.asarray(embedding)
     n = len(embedding)
-    knn = knn_flat(embedding, k=k, input="matrix", symmetric=True, **kwargs)
+
+    nn = NearestNeighbors(n_neighbors=k)
+    nn.fit(embedding)
+    dists, indices = nn.kneighbors(embedding)
+
+    rows = np.repeat(np.arange(n), k)
+    cols = indices.ravel()
+    dist_vals = dists.ravel()
 
     if mode == "connectivity":
-        sigma_df = knn.groupby("node1")["dist"].mean().reset_index()
-        sigma_df.columns = ["node1", "sigma"]
-        knn = knn.merge(sigma_df, on="node1")
-        sigma_j = sigma_df.rename(columns={"node1": "node2", "sigma": "sigma_j"})
-        knn = knn.merge(sigma_j, on="node2")
-        knn["connectivity"] = np.exp(
-            -knn["dist"] ** 2 / (knn["sigma"] * knn["sigma_j"])
-        )
-        mat = long2sparse(
-            knn, "node1", "node2", "connectivity",
-            unique_rows=list(range(1, n + 1)),
-            unique_cols=list(range(1, n + 1)),
-            symmetric=False,
-        )
+        # Compute sigma per node: mean distance to k neighbors
+        sigma = dists.mean(axis=1)  # (n,)
+        sigma = np.maximum(sigma, 1e-12)
+
+        # Gaussian kernel: exp(-d^2 / (sigma_i * sigma_j))
+        vals = np.exp(-dist_vals ** 2 / (sigma[rows] * sigma[cols]))
     else:
-        mat = long2sparse(
-            knn, "node1", "node2", "dist",
-            unique_rows=list(range(1, n + 1)),
-            unique_cols=list(range(1, n + 1)),
-            symmetric=False,
-        )
+        vals = dist_vals
+
+    # Build directed kNN matrix, then symmetrize via element-wise max
+    mat = sp.csr_matrix((vals, (rows, cols)), shape=(n, n))
+    mat = mat.maximum(mat.T)
+
     return mat
 
 
@@ -520,13 +524,20 @@ def sync_sparse_rows(mat, row_names):
             existing = mat.rownames
         else:
             existing = list(range(mat.shape[0]))
-        idx = [existing.index(r) if r in existing else None for r in row_names]
-        data = mat.toarray()
-        new_data = np.zeros((len(row_names), data.shape[1]))
-        for new_i, old_i in enumerate(idx):
+        existing_map = {r: i for i, r in enumerate(existing)}
+        n_cols = mat.shape[1]
+        mat = mat.tocsr()
+
+        # Build result via sparse row slicing (avoids full dense conversion)
+        rows = []
+        zero_row = sp.csr_matrix((1, n_cols))
+        for r in row_names:
+            old_i = existing_map.get(r)
             if old_i is not None:
-                new_data[new_i] = data[old_i]
-        result = sp.csr_matrix(new_data)
+                rows.append(mat[old_i])
+            else:
+                rows.append(zero_row)
+        result = sp.vstack(rows, format="csr")
         result.rownames = list(row_names)
         if hasattr(mat, "colnames"):
             result.colnames = mat.colnames
@@ -611,16 +622,31 @@ def mat_sparsify(mat, row_mass=0.9, col_mass=0.9):
     mass_filter rowwise first, then columnwise.
     """
     mat = np.asarray(mat, dtype=float).copy()
+
+    # Row-wise mass filter (vectorized)
+    idx = np.argsort(-mat, axis=1)
+    sorted_vals = np.take_along_axis(mat, idx, axis=1)
+    cumsum = np.cumsum(sorted_vals, axis=1)
+    row_totals = cumsum[:, -1:]
+    row_totals = np.maximum(row_totals, 1e-12)
+    cutoff = np.argmax(cumsum >= row_mass * row_totals, axis=1)
+    row_mask = np.zeros_like(mat, dtype=bool)
     for i in range(mat.shape[0]):
-        mask = mass_filter(mat[i], thresh=row_mass)
-        new_row = np.zeros_like(mat[i])
-        new_row[mask] = mat[i, mask]
-        mat[i] = new_row
+        row_mask[i, idx[i, :cutoff[i] + 1]] = True
+    mat[~row_mask] = 0.0
+
+    # Column-wise mass filter (vectorized)
+    idx = np.argsort(-mat, axis=0)
+    sorted_vals = np.take_along_axis(mat, idx, axis=0)
+    cumsum = np.cumsum(sorted_vals, axis=0)
+    col_totals = cumsum[-1:, :]
+    col_totals = np.maximum(col_totals, 1e-12)
+    cutoff = np.argmax(cumsum >= col_mass * col_totals, axis=0)
+    col_mask = np.zeros_like(mat, dtype=bool)
     for j in range(mat.shape[1]):
-        mask = mass_filter(mat[:, j], thresh=col_mass)
-        new_col = np.zeros_like(mat[:, j])
-        new_col[mask] = mat[mask, j]
-        mat[:, j] = new_col
+        col_mask[idx[:cutoff[j] + 1, j], j] = True
+    mat[~col_mask] = 0.0
+
     return mat
 
 
