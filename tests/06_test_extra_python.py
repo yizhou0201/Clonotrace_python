@@ -174,12 +174,12 @@ print("\n=== Group D: Visualization Embeddings ===")
 knn_sub200 = ct.embedding2knn(pca[:200], k=10, mode="connectivity")
 
 # D1: umap_from_knn
-umap_coords = ct.umap_from_knn(knn_sub200, n_neighbors=5, seed=1024)
+umap_coords, _ = ct.umap_from_knn(knn_sub200, n_neighbors=5, seed=1024)
 umap_coords.to_csv("tests/outputs_python/umap_coords.csv")
 print(f"umap_coords: {umap_coords.shape}")
 
 # D2: mds_from_knn
-mds_coords = ct.mds_from_knn(knn_sub200, n_components=5)
+mds_coords, _ = ct.mds_from_knn(knn_sub200, n_components=5)
 mds_coords.to_csv("tests/outputs_python/mds_knn_coords.csv")
 print(f"mds_knn_coords: {mds_coords.shape}")
 

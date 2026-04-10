@@ -1,9 +1,8 @@
 """
 Benchmark clone_distance computation on the real hematopoiesis dataset.
-Tests both exact (OT) and approximate (NN) methods.
+Profile the bottleneck: graph.distances() calls.
 """
 import time
-import os
 import numpy as np
 import scipy.sparse as sp
 from scipy.io import mmread
@@ -15,21 +14,16 @@ cell_clone_prob = mmread("real_data/cell_clone_prob.mtx").tocsr()
 prob_rows = open("real_data/cell_clone_prob_rows.txt").read().splitlines()
 prob_cols = open("real_data/cell_clone_prob_cols.txt").read().splitlines()
 
-# Align PCA to cell_clone_prob rows
 pca_aligned = pca.loc[prob_rows]
 N, C = cell_clone_prob.shape
 print(f"  Cells: {N}, Clones: {C}")
-print(f"  PCA dims: {pca_aligned.shape[1]}")
 
-from clonotrace.clone_dis import clone_distance, _build_snn_graph, graph_clone_nn, graph_clone_ot
+from clonotrace.clone_dis import _build_snn_graph, graph_clone_nn
 
 # ================================================================
 # Step 1: SNN graph construction
 # ================================================================
-print("\n" + "=" * 60)
-print("STEP 1: SNN graph construction (k=10)")
-print("=" * 60)
-
+print("\n--- SNN graph construction (k=10) ---")
 t0 = time.time()
 cell_graph = _build_snn_graph(pca_aligned.values, k=10)
 t_graph = time.time() - t0
@@ -37,107 +31,88 @@ print(f"  Time: {t_graph:.2f}s")
 print(f"  Nodes: {cell_graph.vcount()}, Edges: {cell_graph.ecount()}")
 
 # ================================================================
-# Step 2: Approximate method (graph_clone_nn)
+# Step 2: Profile graph.distances() cost
 # ================================================================
-print("\n" + "=" * 60)
-print("STEP 2: Clone distance — NN approximate (default)")
-print("=" * 60)
+print("\n--- Profile: graph.distances() cost ---")
+
+# Single source, all targets
+t0 = time.time()
+d = cell_graph.distances(source=[0], weights="weight")
+t_single = time.time() - t0
+print(f"  Single source → all targets: {t_single:.3f}s")
+
+# 10 sources, all targets
+t0 = time.time()
+d = cell_graph.distances(source=list(range(10)), weights="weight")
+t_10 = time.time() - t0
+print(f"  10 sources → all targets: {t_10:.3f}s ({t_10/10:.3f}s/source)")
+
+# 10 sources, 100 targets
+t0 = time.time()
+d = cell_graph.distances(source=list(range(10)), target=list(range(100)), weights="weight")
+t_10_100 = time.time() - t0
+print(f"  10 sources → 100 targets: {t_10_100:.3f}s")
+
+# Estimate for NN method: each clone has ~39 cells on average (31262/802)
+# For each clone i, it queries from_cells → to_cells
+# from_cells ≈ cells in clone i, to_cells ≈ cells in clones i+1..802
+prob_dense = cell_clone_prob.toarray()
+prob_binary = (prob_dense >= 0.1).astype(float)
+cells_per_clone = prob_binary.sum(axis=0)
+print(f"\n  Cells per clone: mean={cells_per_clone.mean():.0f}, "
+      f"max={cells_per_clone.max():.0f}, min={cells_per_clone.min():.0f}")
+
+# Count total graph.distances() calls and source cells
+total_sources = 0
+for i in range(C):
+    from_cells = np.where(prob_binary[:, i] > 0)[0]
+    total_sources += len(from_cells)
+print(f"  Total source cells across all clones: {total_sources}")
+print(f"  Estimated NN time (serial): {total_sources * t_single:.0f}s")
+
+# ================================================================
+# Step 3: Small-scale NN benchmark (first 20 clones)
+# ================================================================
+print("\n--- NN benchmark: first 20 clones ---")
+small_prob = cell_clone_prob[:, :20]
 
 t0 = time.time()
-dis_nn = graph_clone_nn(cell_graph, cell_clone_prob, prob_thresh=0.1, k=2,
-                         verbose=False, n_jobs=-1)
-t_nn = time.time() - t0
-print(f"  Time: {t_nn:.2f}s")
-print(f"  Clone pairs: {len(dis_nn)}")
-print(f"  Distance range: [{dis_nn['dis'].min():.4f}, {dis_nn['dis'].max():.4f}]")
-
-# Also single-core
-t0 = time.time()
-dis_nn_1 = graph_clone_nn(cell_graph, cell_clone_prob, prob_thresh=0.1, k=2,
+dis_nn_20 = graph_clone_nn(cell_graph, small_prob, prob_thresh=0.1, k=2,
                             verbose=False, n_jobs=1)
-t_nn_1 = time.time() - t0
-print(f"  Time (n_jobs=1): {t_nn_1:.2f}s")
-print(f"  Parallel speedup: {t_nn_1 / t_nn:.1f}x")
+t_nn_20_1 = time.time() - t0
+print(f"  20 clones (n_jobs=1): {t_nn_20_1:.2f}s, pairs: {len(dis_nn_20)}")
+
+t0 = time.time()
+dis_nn_20p = graph_clone_nn(cell_graph, small_prob, prob_thresh=0.1, k=2,
+                              verbose=False, n_jobs=-1)
+t_nn_20_p = time.time() - t0
+print(f"  20 clones (n_jobs=-1): {t_nn_20_p:.2f}s")
+
+# Estimate full
+n_pairs_20 = 20 * 19 // 2
+n_pairs_full = C * (C - 1) // 2
+# The bottleneck scales with the number of source cells × graph size,
+# not just number of pairs
+print(f"\n  Estimated full 802 clones (serial): ~{t_nn_20_1 * C / 20:.0f}s")
+print(f"  Estimated full 802 clones (parallel): ~{t_nn_20_p * C / 20:.0f}s")
 
 # ================================================================
-# Step 3: Exact method (graph_clone_ot) — may be very slow
+# Step 4: Small-scale OT benchmark (first 10 clones)
 # ================================================================
-print("\n" + "=" * 60)
-print("STEP 3: Clone distance — OT exact")
-print("=" * 60)
-
-# First check if POT is available
+print("\n--- OT benchmark: first 10 clones ---")
 try:
     import ot
-    has_pot = True
-except ImportError:
-    has_pot = False
-    print("  POT not installed, skipping exact OT benchmark")
+    from clonotrace.clone_dis import graph_clone_ot
 
-if has_pot:
-    # Try with a small subset first (10 clones) to estimate time
-    print("  Testing with 10 clones to estimate full time...")
-    small_prob = cell_clone_prob[:, :10].toarray()
+    small_prob_ot = cell_clone_prob[:, :10]
     t0 = time.time()
-    dis_ot_small = graph_clone_ot(cell_graph, small_prob, prob_thresh=0.05,
-                                   cache=5000, cores=1, verbose=False)
-    t_small = time.time() - t0
-    n_pairs_small = len(dis_ot_small)
-    n_pairs_full = C * (C - 1) // 2
-    # Estimate: time scales roughly with number of pairs
-    t_estimate = t_small * (n_pairs_full / max(n_pairs_small, 1))
-    print(f"  10-clone OT: {t_small:.2f}s ({n_pairs_small} pairs)")
-    print(f"  Estimated full ({C} clones, {n_pairs_full} pairs): {t_estimate:.0f}s")
-
-    if t_estimate < 600:  # Only run if estimated < 10 min
-        print(f"\n  Running full OT (estimated {t_estimate:.0f}s)...")
-        t0 = time.time()
-        dis_ot = graph_clone_ot(cell_graph, cell_clone_prob, prob_thresh=0.05,
-                                 cache=5000, cores=1, verbose=True)
-        t_ot = time.time() - t0
-        print(f"  Full OT time: {t_ot:.2f}s")
-        print(f"  Clone pairs: {len(dis_ot)}")
-    else:
-        print(f"  Skipping full OT (would take ~{t_estimate/60:.0f} min)")
-
-# ================================================================
-# Step 4: Compare NN distances with pre-computed OT distances
-# ================================================================
-print("\n" + "=" * 60)
-print("STEP 4: Compare NN vs pre-computed OT distances")
-print("=" * 60)
-
-from clonotrace.auxiliary import long2square
-
-# Load pre-computed OT distances
-ot_raw = pd.read_csv("real_data/clone_graph_dis.tsv", sep="\t", index_col=0)
-ot_dis = long2square(ot_raw, row_names_from="group1", col_names_from="group2",
-                      values_from="dis", symmetric=True)
-np.fill_diagonal(ot_dis, 0)
-
-# Build NN distance matrix
-nn_dis = long2square(dis_nn, row_names_from="group1", col_names_from="group2",
-                      values_from="dis", symmetric=True)
-np.fill_diagonal(nn_dis, 0)
-
-# Both should be C×C
-print(f"  OT matrix: {ot_dis.shape}, NN matrix: {nn_dis.shape}")
-
-# Correlation of upper triangle
-mask = np.triu(np.ones_like(ot_dis, dtype=bool), k=1)
-ot_vals = ot_dis[mask]
-nn_vals = nn_dis[mask]
-# Remove NaN
-valid = np.isfinite(ot_vals) & np.isfinite(nn_vals)
-ot_v = ot_vals[valid]
-nn_v = nn_vals[valid]
-
-from scipy.stats import spearmanr, pearsonr
-pearson_r, _ = pearsonr(ot_v, nn_v)
-spearman_r, _ = spearmanr(ot_v, nn_v)
-print(f"  Valid pairs: {valid.sum()}")
-print(f"  Pearson correlation (OT vs NN): {pearson_r:.4f}")
-print(f"  Spearman correlation (OT vs NN): {spearman_r:.4f}")
+    dis_ot_10 = graph_clone_ot(cell_graph, small_prob_ot, prob_thresh=0.05,
+                                cache=5000, cores=1, verbose=False)
+    t_ot_10 = time.time() - t0
+    print(f"  10 clones OT: {t_ot_10:.2f}s, pairs: {len(dis_ot_10)}")
+    print(f"  Estimated full 802 clones: ~{t_ot_10 * (C/10)**2:.0f}s")
+except ImportError:
+    print("  POT not installed, skipping OT benchmark")
 
 # ================================================================
 # Summary
@@ -145,10 +120,9 @@ print(f"  Spearman correlation (OT vs NN): {spearman_r:.4f}")
 print("\n" + "=" * 60)
 print("SUMMARY")
 print("=" * 60)
-print(f"  SNN graph construction: {t_graph:.2f}s")
-print(f"  NN approximate (parallel): {t_nn:.2f}s")
-print(f"  NN approximate (single):   {t_nn_1:.2f}s")
-print(f"  Total (graph + NN parallel): {t_graph + t_nn:.2f}s")
-if has_pot:
-    print(f"  OT exact (10 clones): {t_small:.2f}s")
-    print(f"  OT exact (estimated full): ~{t_estimate:.0f}s")
+print(f"  SNN graph construction:          {t_graph:.2f}s")
+print(f"  graph.distances() per source:    {t_single:.3f}s")
+print(f"  NN 20 clones (serial):           {t_nn_20_1:.2f}s")
+print(f"  NN 20 clones (parallel):         {t_nn_20_p:.2f}s")
+print(f"  NN 802 clones (est. parallel):   ~{t_nn_20_p * C / 20:.0f}s")
+print(f"  Key bottleneck: igraph Dijkstra on {N}-node, {cell_graph.ecount()}-edge graph")

@@ -1,0 +1,12 @@
+{
+  "snn_graph": {
+    "time": 41.392
+  },
+  "clone_nn_20": {
+    "time": 41.392,
+    "pairs": 192
+  },
+  "estimated_full": {
+    "time": 1659.8192
+  }
+}

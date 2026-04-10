@@ -96,6 +96,7 @@ from .visualization import (
     scatterpie,
     umap_from_knn,
     mds_from_knn,
+    diffusion_map,
 )
 
 __version__ = "1.1.0"
@@ -129,5 +130,5 @@ __all__ = [
     # pseudotime
     "acct", "DPT_T", "dpt", "embedding2dpt", "clone_root", "clone_dpt",
     # visualization
-    "connectivity_coord", "dimplot", "scatterpie", "umap_from_knn", "mds_from_knn",
+    "connectivity_coord", "dimplot", "scatterpie", "umap_from_knn", "mds_from_knn", "diffusion_map",
 ]

@@ -1,3 +1,4 @@
+README.md
 pyproject.toml
 clonotrace/__init__.py
 clonotrace/auxiliary.py

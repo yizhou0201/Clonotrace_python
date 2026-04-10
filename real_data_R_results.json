@@ -11,6 +11,9 @@
   "filter_sparsify": {
     "time": 3.855
   },
+  "compute_clone_dis": {
+    "time": 1660
+  },
   "load_clone_dis": {
     "time": 1.096
   },

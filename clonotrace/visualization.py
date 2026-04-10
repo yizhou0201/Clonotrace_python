@@ -106,7 +106,13 @@ def dimplot(embedding, annot, color_by, alpha_by=None, connectivity=None,
     # Background points
     ax.scatter(x, y, c="lightgrey", s=3, alpha=0.5, rasterized=(len(x) > raster_thresh))
 
-    # Colored points
+    # Colored points — cast float-valued integers to int for clean labels
+    col_series = annot[color_by]
+    if col_series.dtype.kind == 'f':
+        non_null = col_series.dropna()
+        if len(non_null) > 0 and (non_null == non_null.astype(int)).all():
+            annot = annot.copy()
+            annot[color_by] = col_series.astype("Int64")
     colors = annot[color_by].values
     unique_colors = pd.Categorical(colors).categories
     cmap = plt.get_cmap("tab20" if len(unique_colors) <= 20 else "hsv")
@@ -264,11 +270,12 @@ def umap_from_knn(adj, n_neighbors=5, seed=1024):
     Returns
     -------
     pd.DataFrame  columns umap_1, umap_2
+    np.ndarray  boolean mask of nodes kept after filter_network
     """
     if umap_lib is None:
         raise ImportError("umap-learn required: pip install umap-learn")
 
-    adj = filter_network(adj, n_neighbors=n_neighbors)
+    adj, kept_mask = filter_network(adj, n_neighbors=n_neighbors)
 
     # Convert to dense distance representation: 1 - normalized_adjacency
     adj_arr = adj.toarray()
@@ -289,7 +296,67 @@ def umap_from_knn(adj, n_neighbors=5, seed=1024):
     df = pd.DataFrame(coords, columns=["umap_1", "umap_2"])
     if hasattr(adj, "rownames"):
         df.index = adj.rownames
-    return df
+    return df, kept_mask
+
+
+def diffusion_map(dismat, maxdim=30, eps_val=None, delta=1e-5):
+    """Compute diffusion map coordinates from a pairwise distance matrix.
+
+    Replicates R's diffusionMap::diffuse().
+
+    Parameters
+    ----------
+    dismat : np.ndarray  (N, N) symmetric distance matrix
+    maxdim : int  number of diffusion dimensions to return
+    eps_val : float or None  bandwidth for Gaussian kernel.
+        If None, uses median distance to the 1%-nearest neighbor.
+    delta : float  sparsification threshold
+
+    Returns
+    -------
+    pd.DataFrame  (N, maxdim) columns dm1, dm2, ...
+    """
+    from scipy.sparse.linalg import eigsh
+
+    D = np.asarray(dismat, dtype=float)
+    n = D.shape[0]
+
+    # Default epsilon: median distance to the 0.01*n nearest neighbor
+    if eps_val is None:
+        knn_k = max(1, int(np.ceil(0.01 * n)))
+        nn_dists = np.sort(D, axis=1)[:, knn_k]
+        eps_val = float(np.median(nn_dists) ** 2)
+
+    # Gaussian kernel
+    K = np.exp(-D ** 2 / eps_val)
+
+    # Normalized graph Laplacian (anisotropic diffusion)
+    v = np.sqrt(K.sum(axis=1))
+    A = K / np.outer(v, v)
+
+    # Sparsify
+    A[A < delta] = 0
+    A_sp = sp.csr_matrix(A)
+
+    # Eigen decomposition (largest eigenvalues of symmetric matrix)
+    neff = min(maxdim + 1, n - 1)
+    eigenvals, eigenvecs = eigsh(A_sp, k=neff, which="LM")
+
+    # Sort by descending eigenvalue
+    idx = np.argsort(eigenvals)[::-1]
+    eigenvals = eigenvals[idx]
+    eigenvecs = eigenvecs[:, idx]
+
+    # Normalize eigenvectors: psi = eigenvecs / eigenvecs[:, 0]
+    psi = eigenvecs / eigenvecs[:, 0:1]
+
+    # Diffusion coordinates (t=0): X = psi[:, 1:] * lambda/(1-lambda)
+    lam = eigenvals[1:maxdim + 1]
+    lam_scaled = lam / (1 - lam + 1e-12)
+    X = psi[:, 1:maxdim + 1] * lam_scaled[np.newaxis, :]
+
+    cols = [f"dm{i + 1}" for i in range(X.shape[1])]
+    return pd.DataFrame(X, columns=cols)
 
 
 def mds_from_knn(adj, n_components=15):
@@ -307,7 +374,7 @@ def mds_from_knn(adj, n_components=15):
     if MDS is None:
         raise ImportError("scikit-learn required: pip install scikit-learn")
 
-    adj = filter_network(adj, n_neighbors=5)
+    adj, kept_mask = filter_network(adj, n_neighbors=5)
 
     adj_arr = adj.toarray()
     max_val = adj_arr.max()
@@ -323,4 +390,4 @@ def mds_from_knn(adj, n_components=15):
     df = pd.DataFrame(coords, columns=cols)
     if hasattr(adj, "rownames"):
         df.index = adj.rownames
-    return df
+    return df, kept_mask

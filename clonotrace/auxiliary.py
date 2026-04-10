@@ -79,19 +79,23 @@ def long2square(long, row_names_from, col_names_from, values_from,
     -------
     np.ndarray  square matrix, row/col order = sorted(nodes)
     """
-    long = long[[row_names_from, col_names_from, values_from]]
+    long = long[[row_names_from, col_names_from, values_from]].copy()
     if symmetric:
         long = long_symmetry(long, row_names_from, col_names_from)
 
+    long[row_names_from] = long[row_names_from].astype(str)
+    long[col_names_from] = long[col_names_from].astype(str)
+
     if nodes is None:
-        nodes = sorted(set(long[row_names_from].tolist() + long[col_names_from].tolist()),
-                       key=str)
+        all_nodes = set(long[row_names_from].tolist() + long[col_names_from].tolist())
+        # Sort numerically if all nodes are numeric strings, otherwise lexicographic
+        try:
+            nodes = sorted(all_nodes, key=lambda x: int(x))
+        except (ValueError, TypeError):
+            nodes = sorted(all_nodes, key=str)
     else:
         # Preserve caller's ordering; convert to strings but do NOT re-sort
         nodes = [str(n) for n in nodes]
-
-    long[row_names_from] = long[row_names_from].astype(str)
-    long[col_names_from] = long[col_names_from].astype(str)
 
     mat_df = long.pivot_table(
         index=row_names_from, columns=col_names_from,
@@ -583,13 +587,24 @@ def compute_transition(adj):
 
 
 def filter_network(adj, n_neighbors=5):
-    """Iteratively remove nodes with fewer than n_neighbors edges."""
+    """Iteratively remove nodes with fewer than n_neighbors edges.
+
+    Returns
+    -------
+    adj : sp.csr_matrix  filtered adjacency
+    kept_mask : np.ndarray  boolean mask of original nodes that survived
+    """
     adj = sp.csr_matrix(adj)
+    n_orig = adj.shape[0]
+    kept_idx = np.arange(n_orig)
     flag = np.array((adj > 0).sum(axis=1)).ravel() >= n_neighbors
     while flag.sum() < adj.shape[0]:
         adj = adj[flag][:, flag]
+        kept_idx = kept_idx[flag]
         flag = np.array((adj > 0).sum(axis=1)).ravel() >= n_neighbors
-    return adj
+    kept_mask = np.zeros(n_orig, dtype=bool)
+    kept_mask[kept_idx] = True
+    return adj, kept_mask
 
 
 def is_symmetric(mat):
