@@ -72,3 +72,24 @@ htmlcov/
 
 # Jupyter
 .ipynb_checkpoints
+
+# Data
+real_data/
+
+# Benchmark scripts and results
+benchmark*.py
+benchmark*.R
+benchmark*.json
+compare_clustering.py
+extract_and_benchmark_R.R
+generate_real_data_plots.py
+generate_report_plots.py
+generate_updated_plots.py
+profile_float32.py
+profile_warmstart.py
+verify_*.py
+clone_dis_R_results.json
+real_data_*_results.json
+report_*.png
+BENCHMARK_REPORT.md
+VISUAL_BENCHMARK_REPORT.md
